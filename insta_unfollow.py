@@ -909,37 +909,61 @@ async def login_instagram(page):
         border_style="cyan",
     ))
 
+    # Acessar diretamente a pagina de login para evitar redirecionamentos
     t_start = time.time()
-    await page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-    debug_log.network("GET", "https://www.instagram.com/", response_time=time.time() - t_start)
-    await asyncio.sleep(3)
+    await page.goto("https://www.instagram.com/accounts/login/", wait_until="networkidle", timeout=30000)
+    debug_log.network("GET", "https://www.instagram.com/accounts/login/", response_time=time.time() - t_start)
 
-    # Verificar se ja esta logado
-    for label in ["Pagina inicial", "Home", "Página inicial"]:
-        try:
-            await page.wait_for_selector(f'svg[aria-label="{label}"]', timeout=4000)
+    # Esperar a pagina estabilizar
+    console.print("  [dim]Aguardando pagina carregar...[/]")
+    await asyncio.sleep(5)
+
+    # Verificar se ja esta logado (redirecionou para feed)
+    current_url = page.url
+    debug_log.debug(f"URL atual apos navegacao: {current_url}")
+
+    if "/accounts/login" not in current_url and "/challenge" not in current_url:
+        # Pode ja estar logado
+        for label in ["Pagina inicial", "Home", "Página inicial", "Inicio"]:
+            try:
+                await page.wait_for_selector(f'svg[aria-label="{label}"]', timeout=3000)
+                console.print("[bold green]  Sessao anterior detectada! Ja esta logado.[/]")
+                debug_log.success("Login via sessao salva - ja autenticado")
+                return True
+            except PlaywrightTimeout:
+                continue
+        # Verificar pela URL
+        if "instagram.com" in current_url and "/accounts/login" not in current_url:
             console.print("[bold green]  Sessao anterior detectada! Ja esta logado.[/]")
-            debug_log.success("Login via sessao salva - ja autenticado")
+            debug_log.success("Login via sessao salva - verificado pela URL")
             return True
-        except PlaywrightTimeout:
-            continue
 
     debug_log.info("Sessao nao encontrada, iniciando login manual")
 
-    # Aceitar cookies
+    # Aceitar cookies (tentar varios seletores)
     try:
-        cookie_btn = await page.wait_for_selector(
-            'button:has-text("Permitir todos os cookies"), button:has-text("Allow all cookies"), button:has-text("Aceitar")',
-            timeout=5000
-        )
-        if cookie_btn:
-            await cookie_btn.click()
-            debug_log.debug("Cookies aceitos")
-            await asyncio.sleep(1)
-    except PlaywrightTimeout:
-        debug_log.debug("Popup de cookies nao apareceu")
+        cookie_selectors = [
+            'button:has-text("Permitir todos os cookies")',
+            'button:has-text("Allow all cookies")',
+            'button:has-text("Aceitar")',
+            'button:has-text("Accept")',
+            'button:has-text("Allow essential and optional cookies")',
+            'button:has-text("Permitir cookies essenciais e opcionais")',
+        ]
+        for sel in cookie_selectors:
+            try:
+                cookie_btn = await page.wait_for_selector(sel, timeout=2000)
+                if cookie_btn:
+                    await cookie_btn.click()
+                    debug_log.debug(f"Cookies aceitos com seletor: {sel}")
+                    await asyncio.sleep(2)
+                    break
+            except PlaywrightTimeout:
+                continue
+    except Exception as e:
+        debug_log.debug(f"Popup de cookies nao apareceu: {e}")
 
-    # Pedir credenciais
+    # Pedir credenciais ANTES de procurar os campos
     console.print(Panel(
         "[bold]Digite suas credenciais do Instagram[/]\n"
         "[dim]A senha nao aparece enquanto voce digita (e normal)[/]",
@@ -954,27 +978,135 @@ async def login_instagram(page):
 
     console.print("\n  [bold]Preenchendo credenciais...[/]")
 
+    # Procurar campo de username com multiplos seletores
+    username_input = None
+    username_selectors = [
+        'input[name="username"]',
+        'input[aria-label="Phone number, username, or email"]',
+        'input[aria-label="Telefone, nome de usuario ou email"]',
+        'input[aria-label="Telefone, nome de usuário ou email"]',
+        'input[type="text"]',
+        'form input:first-of-type',
+    ]
+
+    for sel in username_selectors:
+        try:
+            debug_log.debug(f"Tentando seletor de username: {sel}")
+            username_input = await page.wait_for_selector(sel, timeout=5000)
+            if username_input:
+                debug_log.debug(f"Campo de username encontrado com: {sel}")
+                break
+        except PlaywrightTimeout:
+            continue
+
+    if not username_input:
+        # Ultimo recurso: recarregar a pagina e tentar novamente
+        debug_log.warning("Campo de username nao encontrado, recarregando pagina...")
+        console.print("  [yellow]Recarregando pagina de login...[/]")
+        await page.goto("https://www.instagram.com/accounts/login/", wait_until="networkidle", timeout=30000)
+        await asyncio.sleep(8)
+
+        # Tirar screenshot para debug
+        try:
+            screenshot_path = SCRIPT_DIR / "debug_screenshot.png"
+            await page.screenshot(path=str(screenshot_path))
+            debug_log.debug(f"Screenshot salvo em: {screenshot_path}")
+        except Exception:
+            pass
+
+        for sel in username_selectors:
+            try:
+                username_input = await page.wait_for_selector(sel, timeout=5000)
+                if username_input:
+                    debug_log.debug(f"Campo encontrado na 2a tentativa: {sel}")
+                    break
+            except PlaywrightTimeout:
+                continue
+
+    if not username_input:
+        # Log da pagina para debug
+        try:
+            page_content = await page.content()
+            debug_log.error(f"HTML da pagina (primeiros 2000 chars): {page_content[:2000]}")
+        except Exception:
+            pass
+        console.print(Panel(
+            "[bold red]Nao foi possivel encontrar o campo de login![/]\n"
+            "[white]Possivel causa: Instagram bloqueou ou carregou diferente.[/]\n"
+            "[white]Tente novamente ou use modo com janela (opcao 8 no menu).[/]\n"
+            f"[dim]URL atual: {page.url}[/]",
+            title="[bold red]ERRO NO LOGIN[/]",
+            border_style="red",
+        ))
+        debug_log.error(f"Campo de username nao encontrado. URL: {page.url}")
+        return False
+
     # Preencher username
-    username_input = await page.wait_for_selector('input[name="username"]', timeout=10000)
     await username_input.click()
     await asyncio.sleep(0.5)
     await username_input.fill("")
-    await username_input.type(username, delay=random.randint(50, 150))
+    await asyncio.sleep(0.3)
+    await username_input.type(username, delay=random.randint(80, 180))
     debug_log.debug("Username preenchido")
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.8)
 
-    # Preencher senha
-    password_input = await page.wait_for_selector('input[name="password"]')
+    # Procurar campo de senha com multiplos seletores
+    password_input = None
+    password_selectors = [
+        'input[name="password"]',
+        'input[type="password"]',
+        'input[aria-label="Password"]',
+        'input[aria-label="Senha"]',
+    ]
+
+    for sel in password_selectors:
+        try:
+            password_input = await page.wait_for_selector(sel, timeout=5000)
+            if password_input:
+                debug_log.debug(f"Campo de senha encontrado com: {sel}")
+                break
+        except PlaywrightTimeout:
+            continue
+
+    if not password_input:
+        console.print(Panel("[bold red]Campo de senha nao encontrado![/]", border_style="red"))
+        debug_log.error("Campo de senha nao encontrado")
+        return False
+
     await password_input.click()
     await asyncio.sleep(0.5)
     await password_input.fill("")
-    await password_input.type(password, delay=random.randint(50, 150))
+    await asyncio.sleep(0.3)
+    await password_input.type(password, delay=random.randint(80, 180))
     debug_log.debug("Senha preenchida")
     await asyncio.sleep(1)
 
-    # Clicar em Entrar
-    login_btn = await page.wait_for_selector('button[type="submit"]')
-    await login_btn.click()
+    # Clicar em Entrar (multiplos seletores)
+    login_btn = None
+    login_selectors = [
+        'button[type="submit"]',
+        'button:has-text("Entrar")',
+        'button:has-text("Log in")',
+        'button:has-text("Log In")',
+        'div[role="button"]:has-text("Entrar")',
+    ]
+
+    for sel in login_selectors:
+        try:
+            login_btn = await page.wait_for_selector(sel, timeout=3000)
+            if login_btn:
+                debug_log.debug(f"Botao de login encontrado com: {sel}")
+                break
+        except PlaywrightTimeout:
+            continue
+
+    if not login_btn:
+        # Tentar pressionar Enter como fallback
+        debug_log.warning("Botao de login nao encontrado, tentando Enter")
+        await password_input.press("Enter")
+    else:
+        await login_btn.click()
+
     debug_log.action("Botao de login clicado, aguardando resposta...")
 
     with console.status("[bold cyan]Aguardando resposta do Instagram...[/]", spinner="dots"):
