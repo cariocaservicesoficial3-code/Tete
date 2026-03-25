@@ -1,0 +1,5 @@
+# Coloque aqui os usernames que você NÃO quer dar unfollow
+# Um username por linha (sem @)
+# Exemplo:
+# instagram
+# meuamigo123
