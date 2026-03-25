@@ -24,10 +24,10 @@ echo ""
 
 # Verificar se esta rodando como root
 if [ "$EUID" -eq 0 ]; then
-    PIP_CMD="pip3 install"
+    PIP_CMD="pip3 install --break-system-packages"
     APT_CMD="apt"
 else
-    PIP_CMD="sudo pip3 install"
+    PIP_CMD="sudo pip3 install --break-system-packages"
     APT_CMD="sudo apt"
 fi
 
@@ -45,11 +45,11 @@ $APT_CMD install -y -qq python3 python3-pip python3-venv \
 
 # 3. Instalar Rich (visual profissional no terminal)
 echo -e "${YELLOW}[3/6]${RESET} Instalando Rich (interface visual)..."
-$PIP_CMD rich 2>/dev/null || pip3 install rich 2>/dev/null
+$PIP_CMD rich 2>/dev/null || pip3 install --break-system-packages rich 2>/dev/null
 
 # 4. Instalar Playwright
 echo -e "${YELLOW}[4/6]${RESET} Instalando Playwright para Python..."
-$PIP_CMD playwright 2>/dev/null || pip3 install playwright 2>/dev/null
+$PIP_CMD playwright 2>/dev/null || pip3 install --break-system-packages playwright 2>/dev/null
 
 # 5. Instalar navegador Chromium
 echo -e "${YELLOW}[5/6]${RESET} Instalando navegador Chromium (pode demorar)..."
